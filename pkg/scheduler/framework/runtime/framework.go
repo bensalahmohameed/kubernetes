@@ -17,10 +17,14 @@ limitations under the License.
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"reflect"
 	"sort"
 	"time"
@@ -1186,7 +1190,7 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 			score := nodeScoreList[index].Score
 
 			if score > framework.MaxNodeScore || score < framework.MinNodeScore {
-				err := fmt.Errorf("plugin %q returns an invalid score %v, it should in the range of [%v, %v] after normalizing", pl.Name(), score, framework.MinNodeScore, framework.MaxNodeScore)
+				err := fmt.Errorf("plugin %q returns an invalid score %v, it should be in the range of [%v, %v] after normalizing", pl.Name(), score, framework.MinNodeScore, framework.MaxNodeScore)
 				errCh.SendErrorWithCancel(err, cancel)
 				return
 			}
@@ -1200,10 +1204,59 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 		allNodePluginScores[index] = nodePluginScores
 	}, metrics.Score)
 	if err := errCh.ReceiveError(); err != nil {
-		return nil, framework.AsStatus(fmt.Errorf("applying score defaultWeights on Score plugins: %w", err))
+		return nil, framework.AsStatus(fmt.Errorf("applying score weights on Score plugins: %w", err))
+	}
+
+	// Calculate the difference between Allocatable and Requested MilliCPU for each node
+	nodeCPUDifferences := make(map[string]int64)
+	for _, node := range nodes {
+		nodeName := node.Node().Name
+		allocatableCPU := node.Allocatable.MilliCPU
+		requestedCPU := node.Requested.MilliCPU
+		cpuDifference := allocatableCPU - requestedCPU
+		nodeCPUDifferences[nodeName] = (cpuDifference + 500) / 1000
+	}
+
+	// Get Flask app service name and port from environment variables
+	flaskServiceName := os.Getenv("FLASK_SERVICE_NAME")
+	flaskServicePort := os.Getenv("FLASK_SERVICE_PORT")
+	if flaskServiceName == "" || flaskServicePort == "" {
+		return nil, framework.AsStatus(fmt.Errorf("FLASK_SERVICE_NAME or FLASK_SERVICE_PORT environment variable not set"))
+	}
+
+	// Construct Flask app URL
+	flaskAppURL := fmt.Sprintf("http://%s:%s/nodes", flaskServiceName, flaskServicePort)
+
+	// Send the data to the Flask app
+	msg := map[string]interface{}{"AvailabeCpuCores": nodeCPUDifferences}
+	err := senddataToFlaskApp(flaskAppURL, msg)
+	if err != nil {
+		klog.Errorf("failed to send message to Flask app: %v", err)
+	} else {
+		klog.Infof("sent CPU differences to Flask app successfully")
 	}
 
 	return allNodePluginScores, nil
+}
+
+// Function to send data to the Flask app
+func senddataToFlaskApp(url string, data map[string]interface{}) error {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("received non-OK response from Flask app: %s", resp.Status)
+	}
+
+	return nil
 }
 
 func (f *frameworkImpl) runScorePlugin(ctx context.Context, pl framework.ScorePlugin, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
