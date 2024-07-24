@@ -1198,6 +1198,16 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 		nodeNames[i] = node.Node().Name
 	}
 
+	// Calculate the difference between Allocatable and Requested MilliCPU for each node
+	nodeCPUDifferences := make(map[string]int64)
+	for _, node := range nodes {
+		nodeName := node.Node().Name
+		allocatableCPU := node.Allocatable.MilliCPU
+		requestedCPU := node.Requested.MilliCPU
+		cpuDifference := allocatableCPU - requestedCPU
+		nodeCPUDifferences[nodeName] = (cpuDifference + 500) / 1000
+	}
+
 	// Get Flask app service name and port from environment variables
 	flaskServiceName := os.Getenv("FLASK_SERVICE_NAME")
 	flaskServicePort := os.Getenv("FLASK_SERVICE_PORT")
@@ -1206,7 +1216,7 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 	}
 
 	// Construct Flask app URL
-	flaskAppURL := fmt.Sprintf("http://%s:%s/nodes", flaskServiceName, flaskServicePort)
+	flaskAppURL := fmt.Sprintf("http://%s:%s/nodenames", flaskServiceName, flaskServicePort)
 
 	// Send the data to the Flask app
 	receivedScores, err := senddataToFlaskApp(flaskAppURL, nodeNames)
@@ -1271,20 +1281,60 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 		allNodePluginScores[index] = nodePluginScores
 	}, metrics.Score)
 
+	flaskAppURL2 := fmt.Sprintf("http://%s:%s/nodecpu", flaskServiceName, flaskServicePort)
+
+	msg := map[string]interface{}{"AvailableCpuCores": nodeCPUDifferences}
+	resp, err := sendcpuToFlaskApp(flaskAppURL2, msg)
+	if err != nil {
+		klog.Errorf("failed to send message to Flask app and receive scores: %v", err)
+		return nil, framework.AsStatus(err)
+	}
+	klog.Info(resp)
+
 	if err := errCh.ReceiveError(); err != nil {
 		return nil, framework.AsStatus(fmt.Errorf("applying score weights on Score plugins: %w", err))
 	}
 	return allNodePluginScores, nil
 }
 
-// ModelSpecsExtraction extracts the values of labels "size" and "architecture" from a specified deployment
+// Function to send data to the Flask app and receive scores
+func sendcpuToFlaskApp(url string, data map[string]interface{}) (map[string]interface{}, error) {
+	// Marshal the data to JSON
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+
+	// Send the data to the Flask app
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Check for non-OK status
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("received non-OK response from Flask app: %s", resp.Status)
+	}
+
+	// Decode the response JSON
+	var receivedScores map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&receivedScores)
+	if err != nil {
+		return nil, err
+	}
+
+	return receivedScores, nil
+}
+
+// ModelSpecsExtraction extracts the values of labels "model-size" and "model-architecture" from a specified pod
 func ModelSpecsExtraction(pod *v1.Pod) (string, string, error) {
 	labels := pod.Labels
 	size, sizeExists := labels["model-size"]
 	architecture, architectureExists := labels["model-architecture"]
 
 	if !sizeExists || !architectureExists {
-		return "", "", fmt.Errorf("one or both labels size and architecture do not exist on the deployment")
+		return "", "", fmt.Errorf("one or both labels size and architecture do not exist on the pod")
 	}
 
 	return size, architecture, nil
@@ -1351,7 +1401,6 @@ func NormalizeMap(scores map[string]int64) map[string]int64 {
 	// Normalize the scores
 	normalizedScores := make(map[string]int64, len(scores))
 	for nodeName, score := range scores {
-
 		if maxMinDiff > 0 {
 			normalizedScore := int64((float64(score-minCount) / maxMinDiff) * 100.0)
 			normalizedScores[nodeName] = normalizedScore
