@@ -94,7 +94,7 @@ func (pl *VolumeBinding) Name() string {
 
 // EventsToRegister returns the possible events that may make a Pod
 // failed by this plugin schedulable.
-func (pl *VolumeBinding) EventsToRegister() []framework.ClusterEventWithHint {
+func (pl *VolumeBinding) EventsToRegister(_ context.Context) ([]framework.ClusterEventWithHint, error) {
 	events := []framework.ClusterEventWithHint{
 		// Pods may fail because of missing or mis-configured storage class
 		// (e.g., allowedTopologies, volumeBindingMode), and hence may become
@@ -126,9 +126,9 @@ func (pl *VolumeBinding) EventsToRegister() []framework.ClusterEventWithHint {
 		// When CSIStorageCapacity is enabled, pods may become schedulable
 		// on CSI driver & storage capacity changes.
 		{Event: framework.ClusterEvent{Resource: framework.CSIDriver, ActionType: framework.Add | framework.Update}},
-		{Event: framework.ClusterEvent{Resource: framework.CSIStorageCapacity, ActionType: framework.Add | framework.Update}},
+		{Event: framework.ClusterEvent{Resource: framework.CSIStorageCapacity, ActionType: framework.Add | framework.Update}, QueueingHintFn: pl.isSchedulableAfterCSIStorageCapacityChange},
 	}
-	return events
+	return events, nil
 }
 
 func (pl *VolumeBinding) isSchedulableAfterCSINodeChange(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
@@ -225,6 +225,47 @@ func (pl *VolumeBinding) isSchedulableAfterStorageClassChange(logger klog.Logger
 	}
 
 	logger.V(5).Info("StorageClass was updated, but it doesn't make this pod schedulable")
+	return framework.QueueSkip, nil
+}
+
+// isSchedulableAfterCSIStorageCapacityChange checks whether a CSIStorageCapacity event
+// might make a Pod schedulable or not.
+// Any CSIStorageCapacity addition and a CSIStorageCapacity update to volume limit
+// (calculated based on capacity and maximumVolumeSize) might make a Pod schedulable.
+// Note that an update to nodeTopology and storageClassName is not allowed and
+// we don't have to consider while examining the update event.
+func (pl *VolumeBinding) isSchedulableAfterCSIStorageCapacityChange(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
+	oldCap, newCap, err := util.As[*storagev1.CSIStorageCapacity](oldObj, newObj)
+	if err != nil {
+		return framework.Queue, err
+	}
+
+	if oldCap == nil {
+		logger.V(5).Info(
+			"A new CSIStorageCapacity was created, which could make a Pod schedulable",
+			"Pod", klog.KObj(pod),
+			"CSIStorageCapacity", klog.KObj(newCap),
+		)
+		return framework.Queue, nil
+	}
+
+	oldLimit := volumeLimit(oldCap)
+	newLimit := volumeLimit(newCap)
+
+	logger = klog.LoggerWithValues(
+		logger,
+		"Pod", klog.KObj(pod),
+		"CSIStorageCapacity", klog.KObj(newCap),
+		"volumeLimit(new)", newLimit,
+		"volumeLimit(old)", oldLimit,
+	)
+
+	if newLimit != nil && (oldLimit == nil || newLimit.Value() > oldLimit.Value()) {
+		logger.V(5).Info("VolumeLimit was increased, which could make a Pod schedulable")
+		return framework.Queue, nil
+	}
+
+	logger.V(5).Info("CSIStorageCapacity was updated, but it doesn't make this pod schedulable")
 	return framework.QueueSkip, nil
 }
 

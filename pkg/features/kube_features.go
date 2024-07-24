@@ -45,6 +45,13 @@ const (
 	// Enable usage of Provision of PVCs from snapshots in other namespaces
 	CrossNamespaceVolumeDataSource featuregate.Feature = "CrossNamespaceVolumeDataSource"
 
+	// owner: @aojea
+	// Deprecated: v1.31
+	//
+	// Allow kubelet to request a certificate without any Node IP available, only
+	// with DNS names.
+	AllowDNSOnlyNodeCSR featuregate.Feature = "AllowDNSOnlyNodeCSR"
+
 	// owner: @thockin
 	// deprecated: v1.29
 	//
@@ -61,11 +68,21 @@ const (
 
 	// owner: @tallclair
 	// beta: v1.4
+	// GA: v1.31
 	AppArmor featuregate.Feature = "AppArmor"
 
 	// owner: @tallclair
 	// beta: v1.30
+	// GA: v1.31
 	AppArmorFields featuregate.Feature = "AppArmorFields"
+
+	// owner: @liggitt
+	// kep:
+	// alpha: v1.31
+	//
+	// Make the Node authorizer use fine-grained selector authorization.
+	// Requires AuthorizeWithSelectors to be enabled.
+	AuthorizeNodeWithSelectors featuregate.Feature = "AuthorizeNodeWithSelectors"
 
 	// owner: @danwinship
 	// alpha: v1.27
@@ -201,6 +218,13 @@ const (
 	// Disable in-tree functionality in kubelet to authenticate to cloud provider container registries for image pull credentials.
 	DisableKubeletCloudCredentialProviders featuregate.Feature = "DisableKubeletCloudCredentialProviders"
 
+	// owner: @micahhausler
+	// Deprecated: v1.31
+	//
+	// Disable Node Admission plugin validation of CSRs for kubelet signers where CN=system:node:$nodeName.
+	// Remove in v1.33
+	DisableKubeletCSRAdmissionValidation featuregate.Feature = "DisableKubeletCSRAdmissionValidation"
+
 	// owner: @HirazawaUi
 	// kep: http://kep.k8s.io/4004
 	// alpha: v1.29
@@ -213,7 +237,17 @@ const (
 	// alpha: v1.26
 	//
 	// Enables support for resources with custom parameters and a lifecycle
-	// that is independent of a Pod.
+	// that is independent of a Pod. Resource allocation is done by a DRA driver's
+	// "control plane controller" in cooperation with the scheduler.
+	DRAControlPlaneController featuregate.Feature = "DRAControlPlaneController"
+
+	// owner: @pohly
+	// kep: http://kep.k8s.io/4381
+	// alpha: v1.29
+	//
+	// Enables support for resources with custom parameters and a lifecycle
+	// that is independent of a Pod. Resource allocation is done by the scheduler
+	// based on "structured parameters".
 	DynamicResourceAllocation featuregate.Feature = "DynamicResourceAllocation"
 
 	// owner: @harche
@@ -275,47 +309,11 @@ const (
 	// deletion ordering.
 	HonorPVReclaimPolicy featuregate.Feature = "HonorPVReclaimPolicy"
 
-	// owner: @leakingtapan
-	// alpha: v1.21
-	//
-	// Disables the AWS EBS in-tree driver.
-	InTreePluginAWSUnregister featuregate.Feature = "InTreePluginAWSUnregister"
-
-	// owner: @andyzhangx
-	// alpha: v1.21
-	//
-	// Disables the Azure Disk in-tree driver.
-	InTreePluginAzureDiskUnregister featuregate.Feature = "InTreePluginAzureDiskUnregister"
-
-	// owner: @andyzhangx
-	// alpha: v1.21
-	//
-	// Disables the Azure File in-tree driver.
-	InTreePluginAzureFileUnregister featuregate.Feature = "InTreePluginAzureFileUnregister"
-
-	// owner: @Jiawei0227
-	// alpha: v1.21
-	//
-	// Disables the GCE PD in-tree driver.
-	InTreePluginGCEUnregister featuregate.Feature = "InTreePluginGCEUnregister"
-
-	// owner: @adisky
-	// alpha: v1.21
-	//
-	// Disables the OpenStack Cinder in-tree driver.
-	InTreePluginOpenStackUnregister featuregate.Feature = "InTreePluginOpenStackUnregister"
-
 	// owner: @trierra
 	// alpha: v1.23
 	//
 	// Disables the Portworx in-tree driver.
 	InTreePluginPortworxUnregister featuregate.Feature = "InTreePluginPortworxUnregister"
-
-	// owner: @divyenpatel
-	// alpha: v1.21
-	//
-	// Disables the vSphere in-tree driver.
-	InTreePluginvSphereUnregister featuregate.Feature = "InTreePluginvSphereUnregister"
 
 	// owner: @mimowo
 	// kep: https://kep.k8s.io/3850
@@ -354,6 +352,7 @@ const (
 	// owner: @tenzen-y
 	// kep: https://kep.k8s.io/3998
 	// alpha: v1.30
+	// beta: v1.31
 	//
 	// Allow users to specify when a Job can be declared as succeeded
 	// based on the set of succeeded pods.
@@ -391,10 +390,14 @@ const (
 	// Enable POD resources API with Get method
 	KubeletPodResourcesGet featuregate.Feature = "KubeletPodResourcesGet"
 
-	// KubeletSeparateDiskGC enables Kubelet to garbage collection images/containers on different filesystems
 	// owner: @kannon92
 	// kep: https://kep.k8s.io/4191
 	// alpha: v1.29
+	// beta: v1.31
+	//
+	// The split image filesystem feature enables kubelet to perform garbage collection
+	// of images (read-only layers) and/or containers (writeable layers) deployed on
+	// separate filesystems.
 	KubeletSeparateDiskGC featuregate.Feature = "KubeletSeparateDiskGC"
 
 	// owner: @sallyom
@@ -661,6 +664,13 @@ const (
 	// No effect for other cases such as using serverTLSbootstap.
 	ReloadKubeletServerCertificateFile featuregate.Feature = "ReloadKubeletServerCertificateFile"
 
+	// owner: @SergeyKanzhelev
+	// kep: https://kep.k8s.io/4680
+	// alpha: v1.31
+	//
+	// Adds the AllocatedResourcesStatus to the container status.
+	ResourceHealthStatus featuregate.Feature = "ResourceHealthStatus"
+
 	// owner: @mikedanese
 	// alpha: v1.7
 	// beta: v1.12
@@ -779,6 +789,7 @@ const (
 	// owner: @psch
 	// alpha: v1.26
 	// beta: v1.27
+	// stable: v1.31
 	//
 	// Enables a StatefulSet to start from an arbitrary non zero ordinal
 	StatefulSetStartOrdinal featuregate.Feature = "StatefulSetStartOrdinal"
@@ -852,6 +863,7 @@ const (
 	// owner: @mattcarry, @sunnylovestiramisu
 	// kep: https://kep.k8s.io/3751
 	// alpha: v1.29
+	// beta: v1.31 (off by default)
 	//
 	// Enables user specified volume attributes for persistent volumes, like iops and throughput.
 	VolumeAttributesClass featuregate.Feature = "VolumeAttributesClass"
@@ -959,6 +971,13 @@ const (
 	//
 	// Enable SupplementalGroupsPolicy feature in PodSecurityContext
 	SupplementalGroupsPolicy featuregate.Feature = "SupplementalGroupsPolicy"
+
+	// owner: @saschagrunert
+	// kep: https://kep.k8s.io/4639
+	// alpha: v1.31
+	//
+	// Enables the image volume source.
+	ImageVolume featuregate.Feature = "ImageVolume"
 )
 
 func init() {
@@ -984,13 +1003,17 @@ func init() {
 var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	CrossNamespaceVolumeDataSource: {Default: false, PreRelease: featuregate.Alpha},
 
+	AllowDNSOnlyNodeCSR: {Default: false, PreRelease: featuregate.Deprecated}, // remove after 1.33
+
 	AllowServiceLBStatusOnNonLB: {Default: false, PreRelease: featuregate.Deprecated}, // remove after 1.29
 
 	AnyVolumeDataSource: {Default: true, PreRelease: featuregate.Beta}, // on by default in 1.24
 
-	AppArmor: {Default: true, PreRelease: featuregate.Beta},
+	AppArmor: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.33
 
-	AppArmorFields: {Default: true, PreRelease: featuregate.Beta},
+	AppArmorFields: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.33
+
+	AuthorizeNodeWithSelectors: {Default: false, PreRelease: featuregate.Alpha},
 
 	CloudDualStackNodeIPs: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.32
 
@@ -1028,6 +1051,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	DevicePluginCDIDevices: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.33
 
+	DRAControlPlaneController: {Default: false, PreRelease: featuregate.Alpha},
+
 	DynamicResourceAllocation: {Default: false, PreRelease: featuregate.Alpha},
 
 	EventedPLEG: {Default: false, PreRelease: featuregate.Alpha},
@@ -1046,19 +1071,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	ImageMaximumGCAge: {Default: true, PreRelease: featuregate.Beta},
 
-	InTreePluginAWSUnregister: {Default: false, PreRelease: featuregate.Alpha},
-
-	InTreePluginAzureDiskUnregister: {Default: false, PreRelease: featuregate.Alpha},
-
-	InTreePluginAzureFileUnregister: {Default: false, PreRelease: featuregate.Alpha},
-
-	InTreePluginGCEUnregister: {Default: false, PreRelease: featuregate.Alpha},
-
-	InTreePluginOpenStackUnregister: {Default: false, PreRelease: featuregate.Alpha},
-
 	InTreePluginPortworxUnregister: {Default: false, PreRelease: featuregate.Alpha},
-
-	InTreePluginvSphereUnregister: {Default: false, PreRelease: featuregate.Alpha},
 
 	JobBackoffLimitPerIndex: {Default: true, PreRelease: featuregate.Beta},
 
@@ -1068,7 +1081,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	JobPodReplacementPolicy: {Default: true, PreRelease: featuregate.Beta},
 
-	JobSuccessPolicy: {Default: false, PreRelease: featuregate.Alpha},
+	JobSuccessPolicy: {Default: true, PreRelease: featuregate.Beta},
 
 	KubeletCgroupDriverFromCRI: {Default: true, PreRelease: featuregate.Beta},
 
@@ -1078,7 +1091,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	KubeletPodResourcesGet: {Default: false, PreRelease: featuregate.Alpha},
 
-	KubeletSeparateDiskGC: {Default: false, PreRelease: featuregate.Alpha},
+	KubeletSeparateDiskGC: {Default: true, PreRelease: featuregate.Beta},
 
 	KubeletTracing: {Default: true, PreRelease: featuregate.Beta},
 
@@ -1086,7 +1099,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	LegacyServiceAccountTokenCleanUp: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // GA in 1.30; remove in 1.32
 
-	LocalStorageCapacityIsolationFSQuotaMonitoring: {Default: false, PreRelease: featuregate.Alpha},
+	LocalStorageCapacityIsolationFSQuotaMonitoring: {Default: true, PreRelease: featuregate.Beta},
 
 	LogarithmicScaleDown: {Default: true, PreRelease: featuregate.GA, LockToDefault: true},
 
@@ -1134,7 +1147,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	PortForwardWebsockets: {Default: true, PreRelease: featuregate.Beta},
 
-	ProcMountType: {Default: true, PreRelease: featuregate.Beta},
+	ProcMountType: {Default: false, PreRelease: featuregate.Beta},
 
 	QOSReserved: {Default: false, PreRelease: featuregate.Alpha},
 
@@ -1143,6 +1156,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	RelaxedEnvironmentVariableValidation: {Default: false, PreRelease: featuregate.Alpha},
 
 	ReloadKubeletServerCertificateFile: {Default: true, PreRelease: featuregate.Beta},
+
+	ResourceHealthStatus: {Default: false, PreRelease: featuregate.Alpha},
 
 	RotateKubeletServerCertificate: {Default: true, PreRelease: featuregate.Beta},
 
@@ -1172,7 +1187,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	StatefulSetAutoDeletePVC: {Default: true, PreRelease: featuregate.Beta},
 
-	StatefulSetStartOrdinal: {Default: true, PreRelease: featuregate.Beta},
+	StatefulSetStartOrdinal: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // GA in 1.31, remove in 1.33
 
 	StorageVersionMigrator: {Default: false, PreRelease: featuregate.Alpha},
 
@@ -1188,7 +1203,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	UnknownVersionInteroperabilityProxy: {Default: false, PreRelease: featuregate.Alpha},
 
-	VolumeAttributesClass: {Default: false, PreRelease: featuregate.Alpha},
+	VolumeAttributesClass: {Default: false, PreRelease: featuregate.Beta},
 
 	VolumeCapacityPriority: {Default: false, PreRelease: featuregate.Alpha},
 
@@ -1216,6 +1231,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	SupplementalGroupsPolicy: {Default: false, PreRelease: featuregate.Alpha},
 
+	ImageVolume: {Default: false, PreRelease: featuregate.Alpha},
+
 	// inherited features from generic apiserver, relisted here to get a conflict if it is changed
 	// unintentionally on either side:
 
@@ -1235,9 +1252,9 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	genericfeatures.APIServingWithRoutine: {Default: true, PreRelease: featuregate.Beta},
 
-	genericfeatures.ConsistentListFromCache: {Default: false, PreRelease: featuregate.Alpha},
+	genericfeatures.AuthorizeWithSelectors: {Default: false, PreRelease: featuregate.Alpha},
 
-	genericfeatures.CustomResourceValidationExpressions: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.31
+	genericfeatures.ConsistentListFromCache: {Default: false, PreRelease: featuregate.Alpha},
 
 	genericfeatures.EfficientWatchResumption: {Default: true, PreRelease: featuregate.GA, LockToDefault: true},
 
@@ -1283,7 +1300,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 
 	genericfeatures.WatchFromStorageWithoutResourceVersion: {Default: false, PreRelease: featuregate.Beta},
 
-	genericfeatures.WatchList: {Default: true, PreRelease: featuregate.Beta},
+	genericfeatures.WatchList: {Default: false, PreRelease: featuregate.Alpha},
 
 	genericfeatures.ZeroLimitedNominalConcurrencyShares: {Default: true, PreRelease: featuregate.GA, LockToDefault: true}, // remove in 1.32
 
@@ -1297,6 +1314,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	// features that enable backwards compatibility but are scheduled to be removed
 	// ...
 	HPAScaleToZero: {Default: false, PreRelease: featuregate.Alpha},
+
+	DisableKubeletCSRAdmissionValidation: {Default: false, PreRelease: featuregate.Deprecated}, // remove in 1.33
 
 	StorageNamespaceIndex: {Default: true, PreRelease: featuregate.Beta},
 
