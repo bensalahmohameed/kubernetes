@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"reflect"
@@ -1122,6 +1123,14 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 	defer cancel()
 	errCh := parallelize.NewErrorChannel()
 
+	// Extract model specs from the pod labels
+	modelSize, modelArchitecture, err := ModelSpecsExtraction(pod)
+	if err != nil {
+		klog.Errorf("failed to extract model specs from pod: %v", err)
+		return nil, framework.AsStatus(err)
+	}
+	klog.Infof("Extracted model specs from pod - Model Size: %s, Model Architecture: %s", modelSize, modelArchitecture)
+
 	if len(plugins) > 0 {
 		logger := klog.FromContext(ctx)
 		verboseLogs := logger.V(4).Enabled()
@@ -1157,7 +1166,6 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 			return nil, framework.AsStatus(fmt.Errorf("running Score plugins: %w", err))
 		}
 	}
-
 	// Run NormalizeScore method for each ScorePlugin in parallel.
 	f.Parallelizer().Until(ctx, len(plugins), func(index int) {
 		pl := plugins[index]
@@ -1165,16 +1173,53 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 			return
 		}
 		nodeScoreList := pluginToNodeScores[pl.Name()]
+
+		// Log the scores before normalization
+		klog.Infof("Scores before normalization for plugin %q: %v", pl.Name(), nodeScoreList)
+
 		status := f.runScoreExtension(ctx, pl, state, pod, nodeScoreList)
 		if !status.IsSuccess() {
 			err := fmt.Errorf("plugin %q failed with: %w", pl.Name(), status.AsError())
 			errCh.SendErrorWithCancel(err, cancel)
 			return
 		}
+
+		// Log the scores after normalization
+		klog.Infof("Scores after normalization for plugin %q: %v", pl.Name(), nodeScoreList)
 	}, metrics.Score)
+
 	if err := errCh.ReceiveError(); err != nil {
 		return nil, framework.AsStatus(fmt.Errorf("running Normalize on Score plugins: %w", err))
 	}
+
+	// Extract node names
+	nodeNames := make([]string, len(nodes))
+	for i, node := range nodes {
+		nodeNames[i] = node.Node().Name
+	}
+
+	// Get Flask app service name and port from environment variables
+	flaskServiceName := os.Getenv("FLASK_SERVICE_NAME")
+	flaskServicePort := os.Getenv("FLASK_SERVICE_PORT")
+	if flaskServiceName == "" || flaskServicePort == "" {
+		return nil, framework.AsStatus(fmt.Errorf("FLASK_SERVICE_NAME or FLASK_SERVICE_PORT environment variable not set"))
+	}
+
+	// Construct Flask app URL
+	flaskAppURL := fmt.Sprintf("http://%s:%s/nodes", flaskServiceName, flaskServicePort)
+
+	// Send the data to the Flask app
+	receivedScores, err := senddataToFlaskApp(flaskAppURL, nodeNames)
+	if err != nil {
+		klog.Errorf("failed to send message to Flask app and receive scores: %v", err)
+		return nil, framework.AsStatus(err)
+	}
+	klog.Infof("received scores from Flask app successfully")
+	klog.Info(receivedScores)
+
+	receivedScores = NormalizeMap(receivedScores)
+	klog.Infof("normalized scores")
+	klog.Info(receivedScores)
 
 	// Apply score weight for each ScorePlugin in parallel,
 	// and then, build allNodePluginScores.
@@ -1194,69 +1239,138 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 				errCh.SendErrorWithCancel(err, cancel)
 				return
 			}
+
+			// Log the original score and weight
+			klog.Infof("Plugin %q, Node %q, Original Score: %d, Weight: %d", pl.Name(), nodes[index].Node().Name, score, weight)
+
 			weightedScore := score * int64(weight)
 			nodePluginScores.Scores[i] = framework.PluginScore{
 				Name:  pl.Name(),
 				Score: weightedScore,
 			}
 			nodePluginScores.TotalScore += weightedScore
+
+			// Log the final score of the plugin
+			klog.Infof("Plugin %q, Node %q, Weighted Score: %d, final weight: %d", pl.Name(), nodes[index].Node().Name, weightedScore, nodePluginScores.TotalScore)
 		}
+		weight := int64(5)
+
+		// Apply weight to the normalized scores
+		weightedScores := applyWeight(receivedScores, weight)
+
+		// Add the weighted scores to the total score
+		for nodeName, weightedScore := range weightedScores {
+			if nodeName == nodes[index].Node().Name {
+				nodePluginScores.TotalScore += weightedScore
+
+				// Log the added weighted score
+				klog.Infof("Node %q, Added Weighted Score: %d, New Total Score: %d", nodeName, weightedScore, nodePluginScores.TotalScore)
+			}
+		}
+
 		allNodePluginScores[index] = nodePluginScores
 	}, metrics.Score)
+
 	if err := errCh.ReceiveError(); err != nil {
 		return nil, framework.AsStatus(fmt.Errorf("applying score weights on Score plugins: %w", err))
 	}
-
-	// Calculate the difference between Allocatable and Requested MilliCPU for each node
-	nodeCPUDifferences := make(map[string]int64)
-	for _, node := range nodes {
-		nodeName := node.Node().Name
-		allocatableCPU := node.Allocatable.MilliCPU
-		requestedCPU := node.Requested.MilliCPU
-		cpuDifference := allocatableCPU - requestedCPU
-		nodeCPUDifferences[nodeName] = (cpuDifference + 500) / 1000
-	}
-
-	// Get Flask app service name and port from environment variables
-	flaskServiceName := os.Getenv("FLASK_SERVICE_NAME")
-	flaskServicePort := os.Getenv("FLASK_SERVICE_PORT")
-	if flaskServiceName == "" || flaskServicePort == "" {
-		return nil, framework.AsStatus(fmt.Errorf("FLASK_SERVICE_NAME or FLASK_SERVICE_PORT environment variable not set"))
-	}
-
-	// Construct Flask app URL
-	flaskAppURL := fmt.Sprintf("http://%s:%s/nodes", flaskServiceName, flaskServicePort)
-
-	// Send the data to the Flask app
-	msg := map[string]interface{}{"AvailabeCpuCores": nodeCPUDifferences}
-	err := senddataToFlaskApp(flaskAppURL, msg)
-	if err != nil {
-		klog.Errorf("failed to send message to Flask app: %v", err)
-	} else {
-		klog.Infof("sent CPU differences to Flask app successfully")
-	}
-
 	return allNodePluginScores, nil
 }
 
-// Function to send data to the Flask app
-func senddataToFlaskApp(url string, data map[string]interface{}) error {
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return err
+// ModelSpecsExtraction extracts the values of labels "size" and "architecture" from a specified deployment
+func ModelSpecsExtraction(pod *v1.Pod) (string, string, error) {
+	labels := pod.Labels
+	size, sizeExists := labels["model-size"]
+	architecture, architectureExists := labels["model-architecture"]
+
+	if !sizeExists || !architectureExists {
+		return "", "", fmt.Errorf("one or both labels size and architecture do not exist on the deployment")
 	}
 
+	return size, architecture, nil
+}
+
+// Function to send data to the Flask app and receive scores
+func senddataToFlaskApp(url string, nodeNames []string) (map[string]int64, error) {
+	// Prepare the data to send
+	data := map[string]interface{}{"node_names": nodeNames}
+
+	// Marshal the data to JSON
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+
+	// Send the data to the Flask app
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
+	// Check for non-OK status
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("received non-OK response from Flask app: %s", resp.Status)
+		return nil, fmt.Errorf("received non-OK response from Flask app: %s", resp.Status)
 	}
 
-	return nil
+	// Decode the response JSON
+	var receivedScores map[string]int64
+	err = json.NewDecoder(resp.Body).Decode(&receivedScores)
+	if err != nil {
+		return nil, err
+	}
+
+	return receivedScores, nil
+}
+
+// NormalizeMap normalizes the scores in the given map of node names to scores.
+func NormalizeMap(scores map[string]int64) map[string]int64 {
+	if len(scores) == 0 {
+		return scores
+	}
+
+	var minCount int64 = math.MaxInt64
+	var maxCount int64 = math.MinInt64
+
+	// Find min and max values
+	for _, score := range scores {
+		if score > maxCount {
+			maxCount = score
+		}
+		if score < minCount {
+			minCount = score
+		}
+	}
+
+	fmt.Printf("minCount: %d, maxCount: %d\n", minCount, maxCount)
+
+	// Calculate the difference between max and min values
+	maxMinDiff := math.Abs(float64(maxCount - minCount))
+	fmt.Printf("maxMinDiff: %f\n", maxMinDiff)
+
+	// Normalize the scores
+	normalizedScores := make(map[string]int64, len(scores))
+	for nodeName, score := range scores {
+
+		if maxMinDiff > 0 {
+			normalizedScore := int64((float64(score-minCount) / maxMinDiff) * 100.0)
+			normalizedScores[nodeName] = normalizedScore
+			fmt.Printf("Node: %s, Original Score: %d, Normalized Score: %d\n", nodeName, score, normalizedScore)
+		} else {
+			normalizedScores[nodeName] = 0
+		}
+	}
+
+	return normalizedScores
+}
+
+// applyWeight multiplies each score in the map by the given weight and returns a new map with the weighted scores.
+func applyWeight(scores map[string]int64, weight int64) map[string]int64 {
+	weightedScores := make(map[string]int64, len(scores))
+	for node, score := range scores {
+		weightedScores[node] = score * weight
+	}
+	return weightedScores
 }
 
 func (f *frameworkImpl) runScorePlugin(ctx context.Context, pl framework.ScorePlugin, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
