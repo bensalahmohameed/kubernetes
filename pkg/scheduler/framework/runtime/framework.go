@@ -1263,7 +1263,7 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 			// Log the final score of the plugin
 			klog.Infof("Plugin %q, Node %q, Weighted Score: %d, final weight: %d", pl.Name(), nodes[index].Node().Name, weightedScore, nodePluginScores.TotalScore)
 		}
-		weight := int64(5)
+		weight := float64(5)
 
 		// Apply weight to the normalized scores
 		weightedScores := applyWeight(receivedScores, weight)
@@ -1271,10 +1271,13 @@ func (f *frameworkImpl) RunScorePlugins(ctx context.Context, state *framework.Cy
 		// Add the weighted scores to the total score
 		for nodeName, weightedScore := range weightedScores {
 			if nodeName == nodes[index].Node().Name {
-				nodePluginScores.TotalScore += weightedScore
+				nodePluginScores.TotalScore = nodePluginScores.TotalScore * 10000
+				weightedScore = weightedScore * 10000
+				var nweightedScore = int64(weightedScore)
+				nodePluginScores.TotalScore += nweightedScore
 
 				// Log the added weighted score
-				klog.Infof("Node %q, Added Weighted Score: %d, New Total Score: %d", nodeName, weightedScore, nodePluginScores.TotalScore)
+				klog.Infof("Node %q, Added Weighted Score: %v, New Total Score: %v", nodeName, nweightedScore, nodePluginScores.TotalScore)
 			}
 		}
 
@@ -1341,7 +1344,7 @@ func ModelSpecsExtraction(pod *v1.Pod) (string, string, error) {
 }
 
 // Function to send data to the Flask app and receive scores
-func senddataToFlaskApp(url string, nodeNames []string) (map[string]int64, error) {
+func senddataToFlaskApp(url string, nodeNames []string) (map[string]float64, error) {
 	// Prepare the data to send
 	data := map[string]interface{}{"node_names": nodeNames}
 
@@ -1364,7 +1367,7 @@ func senddataToFlaskApp(url string, nodeNames []string) (map[string]int64, error
 	}
 
 	// Decode the response JSON
-	var receivedScores map[string]int64
+	var receivedScores map[string]float64
 	err = json.NewDecoder(resp.Body).Decode(&receivedScores)
 	if err != nil {
 		return nil, err
@@ -1374,13 +1377,13 @@ func senddataToFlaskApp(url string, nodeNames []string) (map[string]int64, error
 }
 
 // NormalizeMap normalizes the scores in the given map of node names to scores.
-func NormalizeMap(scores map[string]int64) map[string]int64 {
+func NormalizeMap(scores map[string]float64) map[string]float64 {
 	if len(scores) == 0 {
 		return scores
 	}
 
-	var minCount int64 = math.MaxInt64
-	var maxCount int64 = math.MinInt64
+	var minCount float64 = math.MaxFloat64
+	var maxCount float64 = -math.MaxFloat64
 
 	// Find min and max values
 	for _, score := range scores {
@@ -1392,19 +1395,19 @@ func NormalizeMap(scores map[string]int64) map[string]int64 {
 		}
 	}
 
-	fmt.Printf("minCount: %d, maxCount: %d\n", minCount, maxCount)
+	fmt.Printf("minCount: %f, maxCount: %f\n", minCount, maxCount)
 
 	// Calculate the difference between max and min values
-	maxMinDiff := math.Abs(float64(maxCount - minCount))
+	maxMinDiff := maxCount - minCount
 	fmt.Printf("maxMinDiff: %f\n", maxMinDiff)
 
 	// Normalize the scores
-	normalizedScores := make(map[string]int64, len(scores))
+	normalizedScores := make(map[string]float64, len(scores))
 	for nodeName, score := range scores {
 		if maxMinDiff > 0 {
-			normalizedScore := int64((float64(score-minCount) / maxMinDiff) * 100.0)
+			normalizedScore := ((score - minCount) / maxMinDiff) * 100.0
 			normalizedScores[nodeName] = normalizedScore
-			fmt.Printf("Node: %s, Original Score: %d, Normalized Score: %d\n", nodeName, score, normalizedScore)
+			fmt.Printf("Node: %s, Original Score: %f, Normalized Score: %f\n", nodeName, score, normalizedScore)
 		} else {
 			normalizedScores[nodeName] = 0
 		}
@@ -1414,8 +1417,8 @@ func NormalizeMap(scores map[string]int64) map[string]int64 {
 }
 
 // applyWeight multiplies each score in the map by the given weight and returns a new map with the weighted scores.
-func applyWeight(scores map[string]int64, weight int64) map[string]int64 {
-	weightedScores := make(map[string]int64, len(scores))
+func applyWeight(scores map[string]float64, weight float64) map[string]float64 {
+	weightedScores := make(map[string]float64, len(scores))
 	for node, score := range scores {
 		weightedScores[node] = score * weight
 	}
