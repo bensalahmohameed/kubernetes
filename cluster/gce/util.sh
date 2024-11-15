@@ -1254,7 +1254,13 @@ AUTH_PROVIDER_GCP_STORAGE_PATH: $(yaml-quote "${AUTH_PROVIDER_GCP_STORAGE_PATH}"
 AUTH_PROVIDER_GCP_VERSION: $(yaml-quote "${AUTH_PROVIDER_GCP_VERSION}")
 AUTH_PROVIDER_GCP_LINUX_BIN_DIR: $(yaml-quote "${AUTH_PROVIDER_GCP_LINUX_BIN_DIR}")
 AUTH_PROVIDER_GCP_LINUX_CONF_FILE: $(yaml-quote "${AUTH_PROVIDER_GCP_LINUX_CONF_FILE}")
+KUBERNETES_REGISTRY_PULL_THROUGH_HOST: $(yaml-quote "${KUBERNETES_REGISTRY_PULL_THROUGH_HOST:-}")
 EOF
+  if [[ -n "${KUBERNETES_REGISTRY_PULL_THROUGH_BASIC_AUTH_TOKEN_PATH:-}" ]]; then
+    cat >>"$file" <<EOF
+KUBERNETES_REGISTRY_PULL_THROUGH_BASIC_AUTH_TOKEN: $(yaml-quote "$(cat "${KUBERNETES_REGISTRY_PULL_THROUGH_BASIC_AUTH_TOKEN_PATH}")")
+EOF
+  fi
   if [[ "${master}" == "true" && "${MASTER_OS_DISTRIBUTION}" == "gci" ]] || \
      [[ "${master}" == "false" && "${NODE_OS_DISTRIBUTION}" == "gci" ]]  || \
      [[ "${master}" == "true" && "${MASTER_OS_DISTRIBUTION}" == "cos" ]] || \
@@ -1506,11 +1512,6 @@ EOF
     if [ -n "${CLUSTER_SIGNING_DURATION:-}" ]; then
       cat >>"$file" <<EOF
 CLUSTER_SIGNING_DURATION: $(yaml-quote "${CLUSTER_SIGNING_DURATION}")
-EOF
-    fi
-    if [[ "${NODE_ACCELERATORS:-}" == *"type=nvidia"* ]]; then
-      cat >>"$file" <<EOF
-ENABLE_NVIDIA_GPU_DEVICE_PLUGIN: $(yaml-quote "true")
 EOF
     fi
     if [ -n "${ADDON_MANAGER_LEADER_ELECTION:-}" ]; then
@@ -1775,23 +1776,26 @@ function setup-easyrsa {
   # Note: This was heavily cribbed from make-ca-cert.sh
   (set -x
     cd "${KUBE_TEMP}"
-    curl -L -O --connect-timeout 20 --retry 6 --retry-delay 2 https://dl.k8s.io/easy-rsa/easy-rsa.tar.gz
-    tar xzf easy-rsa.tar.gz
-    mkdir easy-rsa-master/kubelet
-    cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/kubelet
-    mkdir easy-rsa-master/aggregator
-    cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/aggregator
-    mkdir easy-rsa-master/cloud-pvl-admission
-    cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/cloud-pvl-admission
-    mkdir easy-rsa-master/konnectivity-server
-    cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/konnectivity-server
-    mkdir easy-rsa-master/konnectivity-agent
-    cp -r easy-rsa-master/easyrsa3/* easy-rsa-master/konnectivity-agent) &>"${cert_create_debug_output}" || true
-  CERT_DIR="${KUBE_TEMP}/easy-rsa-master/easyrsa3"
-  AGGREGATOR_CERT_DIR="${KUBE_TEMP}/easy-rsa-master/aggregator"
-  CLOUD_PVL_ADMISSION_CERT_DIR="${KUBE_TEMP}/easy-rsa-master/cloud-pvl-admission"
-  KONNECTIVITY_SERVER_CERT_DIR="${KUBE_TEMP}/easy-rsa-master/konnectivity-server"
-  KONNECTIVITY_AGENT_CERT_DIR="${KUBE_TEMP}/easy-rsa-master/konnectivity-agent"
+    curl -L -o easy-rsa.tar.gz --connect-timeout 20 --retry 6 --retry-delay 2 https://github.com/OpenVPN/easy-rsa/releases/download/v3.1.7/EasyRSA-3.1.7.tgz
+    mkdir -p easy-rsa && tar xzf easy-rsa.tar.gz -C easy-rsa --strip-components 1
+    local -r files_to_copy=(easyrsa openssl-easyrsa.cnf  x509-types vars.example)
+    mkdir easy-rsa/aggregator
+    # shellcheck disable=SC2145
+    cp -r easy-rsa/"${files_to_copy[@]}" easy-rsa/aggregator
+    mkdir easy-rsa/cloud-pvl-admission
+    # shellcheck disable=SC2145
+    cp -r easy-rsa/"${files_to_copy[@]}" easy-rsa/cloud-pvl-admission
+    mkdir easy-rsa/konnectivity-server
+    # shellcheck disable=SC2145
+    cp -r easy-rsa/"${files_to_copy[@]}" easy-rsa/konnectivity-server
+    mkdir easy-rsa/konnectivity-agent
+    # shellcheck disable=SC2145
+    cp -r easy-rsa/"${files_to_copy[@]}" easy-rsa/konnectivity-agent) &>"${cert_create_debug_output}" || true
+  CERT_DIR="${KUBE_TEMP}/easy-rsa"
+  AGGREGATOR_CERT_DIR="${KUBE_TEMP}/easy-rsa/aggregator"
+  CLOUD_PVL_ADMISSION_CERT_DIR="${KUBE_TEMP}/easy-rsa/cloud-pvl-admission"
+  KONNECTIVITY_SERVER_CERT_DIR="${KUBE_TEMP}/easy-rsa/konnectivity-server"
+  KONNECTIVITY_AGENT_CERT_DIR="${KUBE_TEMP}/easy-rsa/konnectivity-agent"
   if [ ! -x "${CERT_DIR}/easyrsa" ] || [ ! -x "${AGGREGATOR_CERT_DIR}/easyrsa" ]; then
     # TODO(roberthbailey,porridge): add better error handling here,
     # see https://github.com/kubernetes/kubernetes/issues/55229
@@ -1824,8 +1828,8 @@ function generate-certs {
     ./easyrsa --batch "--req-cn=${PRIMARY_CN}@$(date +%s)" build-ca nopass
     # SANS (expected to be) defined by caller
     # shellcheck disable=SC2153
-    ./easyrsa --subject-alt-name="${SANS}" build-server-full "${MASTER_NAME}" nopass
-    ./easyrsa build-client-full kube-apiserver nopass
+    ./easyrsa --batch --subject-alt-name="${SANS}" build-server-full "${MASTER_NAME}" nopass
+    ./easyrsa --batch build-client-full kube-apiserver nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -1838,8 +1842,8 @@ function generate-certs {
     rm -f "kubelet.csr"
 
     # Make a superuser client cert with subject "O=system:masters, CN=kubecfg"
-    ./easyrsa --dn-mode=org \
-      --req-cn=kubecfg --req-org=system:masters \
+    ./easyrsa --batch --dn-mode=org \
+      --req-org=system:masters \
       --req-c= --req-st= --req-city= --req-email= --req-ou= \
       build-client-full kubecfg nopass) &>"${cert_create_debug_output}" || true
   local output_file_missing=0
@@ -1885,12 +1889,12 @@ function generate-aggregator-certs {
   local -r cert_create_debug_output=$(mktemp "${KUBE_TEMP}/cert_create_debug_output.XXX")
   # Note: This was heavily cribbed from make-ca-cert.sh
   (set -x
-    cd "${KUBE_TEMP}/easy-rsa-master/aggregator"
+    cd "${KUBE_TEMP}/easy-rsa/aggregator"
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${AGGREGATOR_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="${AGGREGATOR_SANS}" build-server-full "${AGGREGATOR_MASTER_NAME}" nopass
-    ./easyrsa build-client-full aggregator-apiserver nopass
+    ./easyrsa --batch --subject-alt-name="${AGGREGATOR_SANS}" build-server-full "${AGGREGATOR_MASTER_NAME}" nopass
+    ./easyrsa --batch build-client-full aggregator-apiserver nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -1903,8 +1907,8 @@ function generate-aggregator-certs {
     rm -f "proxy-client.csr"
 
     # Make a superuser client cert with subject "O=system:masters, CN=kubecfg"
-    ./easyrsa --dn-mode=org \
-      --req-cn=proxy-clientcfg --req-org=system:aggregator \
+    ./easyrsa --batch --dn-mode=org \
+      --req-org=system:aggregator \
       --req-c= --req-st= --req-city= --req-email= --req-ou= \
       build-client-full proxy-clientcfg nopass) &>"${cert_create_debug_output}" || true
   local output_file_missing=0
@@ -1946,12 +1950,12 @@ function generate-konnectivity-server-certs {
   # Note: This was heavily cribbed from make-ca-cert.sh
   (set -x
     # Make the client <-> konnectivity server side certificates.
-    cd "${KUBE_TEMP}/easy-rsa-master/konnectivity-server"
+    cd "${KUBE_TEMP}/easy-rsa/konnectivity-server"
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${KONNECTIVITY_SERVER_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="IP:127.0.0.1,${KONNECTIVITY_SERVER_SANS}" build-server-full server nopass
-    ./easyrsa build-client-full client nopass
+    ./easyrsa --batch --subject-alt-name="IP:127.0.0.1,${KONNECTIVITY_SERVER_SANS}" build-server-full server nopass
+    ./easyrsa --batch build-client-full client nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -1962,12 +1966,12 @@ function generate-konnectivity-server-certs {
     rm -f "konnectivity-server.csr"
 
     # Make the agent <-> konnectivity server side certificates.
-    cd "${KUBE_TEMP}/easy-rsa-master/konnectivity-agent"
+    cd "${KUBE_TEMP}/easy-rsa/konnectivity-agent"
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${KONNECTIVITY_SERVER_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="${KONNECTIVITY_SERVER_SANS}" build-server-full server nopass
-    ./easyrsa build-client-full client nopass
+    ./easyrsa --batch --subject-alt-name="${KONNECTIVITY_SERVER_SANS}" build-server-full server nopass
+    ./easyrsa --batch build-client-full client nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -2024,12 +2028,12 @@ function generate-cloud-pvl-admission-certs {
   # Note: This was heavily cribbed from make-ca-cert.sh
   (set -x
     # Make the client <-> cloud-pvl-admission server side certificates.
-    cd "${KUBE_TEMP}/easy-rsa-master/cloud-pvl-admission"
+    cd "${KUBE_TEMP}/easy-rsa/cloud-pvl-admission"
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${CLOUD_PVL_ADMISSION_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="IP:127.0.0.1,${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
-    ./easyrsa build-client-full client nopass
+    ./easyrsa --batch --subject-alt-name="IP:127.0.0.1,${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
+    ./easyrsa --batch build-client-full client nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -2040,12 +2044,12 @@ function generate-cloud-pvl-admission-certs {
     rm -f "cloud-pvl-admission.csr"
 
     # Make the cloud-pvl-admission server side certificates.
-    cd "${KUBE_TEMP}/easy-rsa-master/cloud-pvl-admission"
+    cd "${KUBE_TEMP}/easy-rsa/cloud-pvl-admission"
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${CLOUD_PVL_ADMISSION_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
-    ./easyrsa build-client-full client nopass
+    ./easyrsa --batch --subject-alt-name="${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
+    ./easyrsa --batch build-client-full client nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
